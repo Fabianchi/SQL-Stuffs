@@ -1,5 +1,6 @@
 
-DECLARE @JSONFilters AS NVARCHAR(MAX) ='[{"EntidadSyncId":"1","FechaInicio":"1800-01-01","FechaFin":"9999-12-31","Tipo":"B","ID":"","AreaNomina":"","Anio":"2020","Periodo":""},{"EntidadSyncId":"2","FechaInicio":"1800-01-01","FechaFin":"9999-12-31","Tipo":"B","ID":"","AreaNomina":"","Anio":"2020","Periodo":""}]';
+
+DECLARE @JSONFilters AS NVARCHAR(MAX) ='[{"EntidadSyncId":"1","FechaInicio":"1800-01-01","FechaFin":"9999-12-31","Tipo":"B","ID":"","AreaNomina":"","Anio":"2020","Periodo":""},{"EntidadSyncId":"2","FechaInicio":"1900-01-01","FechaFin":"9999-12-31","Tipo":"B","ID":"","AreaNomina":"","Anio":"2020","Periodo":""}]';
 
 
 --declares a container table with filters list and inserts the json list like rows
@@ -44,7 +45,8 @@ BEGIN
 	--applys the same process to transform json filters collection in a table (EntityFilters)
 	DECLARE @EntityFilters AS TABLE([Filter] NVARCHAR(150), [Value] NVARCHAR(MAX));
 	INSERT INTO @EntityFilters
-	SELECT [Key],[value]
+	SELECT [Key],
+		   [value]
 	FROM OPENJSON(@EntityJSONFilters);
 
 	--now we have two tables the FiltersValues table and the EntityFilters we can make a merge of this and get a final result with values
@@ -53,6 +55,7 @@ BEGIN
 		SELECT 
 		[Filter],
 		[Value]
+		FROM @FiltersValues
 	) 
 	AS SOURCE
 	(
@@ -61,13 +64,31 @@ BEGIN
 	)
 	ON (TARGET.[Filter] = SOURCE.[Filter])
 	WHEN MATCHED THEN
+	UPDATE SET
+		TARGET.[Value] = ISNULL(SOURCE.Value,TARGET.[Value])
+	;
 
+	--when filters values already has been setted on temp table, transforms them in a json string again	
+	DECLARE @AllJsonProperties AS NVARCHAR(MAX);
+	SELECT @AllJsonProperties = ISNULL(@AllJsonProperties + ',','') + '"' + [Filter] + '":"' + [Value] + '"'
+	FROM @EntityFilters;
+	DECLARE @JSONString AS NVARCHAR(MAX) = '{' + @AllJsonProperties +'}';
 
+	--finally we update "EntitySync" filters field with the new value
+	UPDATE EntidadSync SET FiltroAdicional = @JSONString
+	WHERE EntidadSyncId = @cEntidadSyncId;
 
+	--removes temp tables
+	SET @cFilter = NULL;
+	SET @cEntidadSyncId = NULL;
+	SET @EntityJSONFilters = NULL;
+	SET @AllJsonProperties = NULL;
+	SET @JSONString = NULL;
+	DELETE @FiltersValues
+	DELETE @EntityFilters
 
 	--increase index
 	SET @i = @i + 1;
 END
-
 
 
