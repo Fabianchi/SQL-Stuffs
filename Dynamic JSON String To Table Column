@@ -1,1 +1,73 @@
 
+DECLARE @JSONFilters AS NVARCHAR(MAX) ='[{"EntidadSyncId":"1","FechaInicio":"1800-01-01","FechaFin":"9999-12-31","Tipo":"B","ID":"","AreaNomina":"","Anio":"2020","Periodo":""},{"EntidadSyncId":"2","FechaInicio":"1800-01-01","FechaFin":"9999-12-31","Tipo":"B","ID":"","AreaNomina":"","Anio":"2020","Periodo":""}]';
+
+
+--declares a container table with filters list and inserts the json list like rows
+DECLARE @FiltersList AS TABLE([Index] INT, Filters NVARCHAR(MAX))
+INSERT INTO @FiltersList
+SELECT ROW_NUMBER() OVER(ORDER BY [Value]), 
+	   [Value]
+FROM OPENJSON(@JSONFilters,'$');
+--WITH ( 
+-- [Values] NVARCHAR(MAX) '$'
+-- AS JSON
+--)
+
+--now we iterates filters table, for each item we gonna get the filter json
+DECLARE @i AS INT = 1;
+DECLARE @l AS INT = (SELECT MAX([Index]) FROM @FiltersList);
+WHILE(@i <= @l)
+BEGIN
+	
+	--gets current filter json in bucle
+	DECLARE @cFilter AS NVARCHAR(MAX) = (SELECT TOP 1 [Filters] FROM @FiltersList WHERE [index] = @i)
+
+	--gets current "EntidadSyncId" value from json (to get target table values and make a merge)
+	DECLARE @cEntidadSyncId AS INT;
+	SELECT @cEntidadSyncId = EntidadSyncId 
+	FROM OPENJSON(@cFilter)
+	WITH (
+		EntidadSyncId INT '$.EntidadSyncId' 
+	);
+
+	--transform json filters collection in a table (FiltersValues), at the same time removes EntidadSyncId filter from collection
+	DECLARE @FiltersValues AS TABLE([Filter] NVARCHAR(150), [Value] NVARCHAR(MAX));
+	INSERT INTO @FiltersValues
+	SELECT [key],[value]
+	FROM OPENJSON(@cFilter)
+	WHERE [key] NOT IN ('EntidadSyncId')
+	;
+
+	--now we take json values from target table using the current "EntidadSyncId"
+	DECLARE @EntityJSONFilters AS NVARCHAR(MAX) = (SELECT TOP 1 FiltroAdicional FROM EntidadSync WHERE EntidadSyncId = @cEntidadSyncId);
+	
+	--applys the same process to transform json filters collection in a table (EntityFilters)
+	DECLARE @EntityFilters AS TABLE([Filter] NVARCHAR(150), [Value] NVARCHAR(MAX));
+	INSERT INTO @EntityFilters
+	SELECT [Key],[value]
+	FROM OPENJSON(@EntityJSONFilters);
+
+	--now we have two tables the FiltersValues table and the EntityFilters we can make a merge of this and get a final result with values
+	MERGE @EntityFilters AS TARGET
+	USING(
+		SELECT 
+		[Filter],
+		[Value]
+	) 
+	AS SOURCE
+	(
+		[Filter],
+		[Value]
+	)
+	ON (TARGET.[Filter] = SOURCE.[Filter])
+	WHEN MATCHED THEN
+
+
+
+
+	--increase index
+	SET @i = @i + 1;
+END
+
+
+
