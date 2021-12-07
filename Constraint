@@ -1,0 +1,11 @@
+ALTER TABLE [dbo].[ApplicationLog] ADD  CONSTRAINT [CHK_NOTIFICATED]  DEFAULT ((0)) FOR [Notificated]
+
+ALTER TABLE [dbo].[ApplicationLog] ADD  CONSTRAINT [CHK_DATEUTC]  DEFAULT (getdate()) FOR [DateUTC]
+
+ALTER TABLE [dbo].[ApplicationLog]  WITH CHECK ADD  CONSTRAINT [CHK_TYPE] CHECK  ((upper([TYPE])='START' OR upper([TYPE])='INFO' OR upper([TYPE])='SUCCESS' OR upper([TYPE])='ERROR' OR upper([TYPE])='WARNING'))
+GO
+
+ALTER TABLE [dbo].[ApplicationLog] CHECK CONSTRAINT [CHK_TYPE]
+GO
+
+
