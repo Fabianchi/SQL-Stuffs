@@ -1,0 +1,436 @@
+
+ ALTER PROCEDURE [dbo].[st_CalculoPrenominaHCM]           
+         
+ @ClaveEmpresa varchar(50) = null      
+ ,@TipoNomina NVARCHAR(50)= null          
+ ,@PeriodoProcesando INT= null          
+ ,@FechaInicioPeriodoProcesando DATETIME = null          
+ ,@FechaFinPeriodoProcesando DATETIME = null          
+ ,@Ficha NVARCHAR(50) = null          
+AS             
+BEGIN          
+ SET NOCOUNT ON          
+
+
+
+ DECLARE @estatusActivoEmpleado INT = (SELECT Valor FROM dbo.fn_VariableSistema('EstatusEmpleadoActivo') )  
+  
+  
+--##############################################################################################################################################          
+ IF OBJECT_ID('tempdb..#IncidenciasProcesadas') IS NOT NULL          
+ DROP TABLE #IncidenciasProcesadas          
+ CREATE TABLE #IncidenciasProcesadas (               
+ [IdCodigoPersonal] [varchar](50) NOT NULL,            
+ [IdIncidencia] [varchar](50) NOT NULL,               
+ [IdCantidad] [float] NOT NULL,           
+ [IdFecha] [datetime] NOT NULL,           
+ [Estatus] [int] NOT NULL,          
+ [Observaciones] [varchar](max) NULL    
+  )                    
+          
+ IF OBJECT_ID('tempdb..#IncidenciasDevengados') IS NOT NULL          
+ DROP TABLE #IncidenciasDevengados          
+ CREATE TABLE #IncidenciasDevengados (          
+ [IdCodigoPersonal] [varchar](50) NOT NULL,            
+ [IdIncidencia] [varchar](50) NOT NULL,               
+ [IdCantidad] [float] NOT NULL,           
+ [IdFecha] [datetime] NOT NULL,                 
+ [Estatus] [int] NOT NULL,          
+ [Observaciones] [varchar](max) NULL          
+  )                    
+          
+ IF OBJECT_ID('tempdb..#IncidenciasDevengadosPaso') IS NOT NULL          
+ DROP TABLE #IncidenciasDevengadosPaso          
+ CREATE TABLE #IncidenciasDevengadosPaso (              
+ [IdCodigoPersonal] [varchar](50) NOT NULL,           
+ [IdIncidencia] [varchar](50) NOT NULL,               
+ [IdCantidad] [float] NOT NULL,           
+ [IdFecha] [datetime] NOT NULL,              
+ [Estatus] [int] NULL,          
+ [Observaciones] [varchar](max) NULL,          
+ [Agrupado] [int] NULL          
+  )                    
+          
+          
+ DECLARE @ModuloCalculoIncidencias VARCHAR(50) = ISNULL((SELECT TOP(1) Valor FROM dbo.fn_VariableSistema('ModuloCalculoIncidencia')),0);          
+             
+ DECLARE @AnioPeriodoProcesando AS INT = YEAR(@FechaFinPeriodoProcesando)          
+ DECLARE @UID AS VARCHAR(100) = (SELECT Valor FROM dbo.fn_VariableSistema('PREN_Incidencia_UID'))          
+ --SETEAMOS UN RANGO DE FECHAS PARA TRAER LOS EVENTOS QUE SE PROCESARÁN           
+ DECLARE @FechaInicioRango AS DATETIME = (DATEADD(DAY,-31,@FechaInicioPeriodoProcesando));          
+ DECLARE @FechaFinRango AS DATETIME = (DATEADD(DAY,15,@FechaFinPeriodoProcesando));          
+ DECLARE @SP_CategoriaRolGuardia INT = (SELECT Valor FROM dbo.fn_VariableSistema('SP_CategoriaRolGuardia') WHERE idx=0)          
+ --Variables Titularidad          
+ DECLARE @SP_EstadoPlazaCobertura INT = (SELECT DISTINCT TOP 1 TitularidadId FROM Vw_Titularidad WITH (NOLOCK) WHERE    Clave COLLATE SQL_Latin1_General_CP1_CI_AS =  (SELECT Valor FROM dbo.fn_VariableSistema('SP_EstadoPlazaCobertura')))          
+ DECLARE @SP_EstadoPlazaTitular INT =  (SELECT DISTINCT TOP 1 TitularidadId FROM Vw_Titularidad WITH (NOLOCK) WHERE     Clave COLLATE SQL_Latin1_General_CP1_CI_AS =  (SELECT Valor FROM dbo.fn_VariableSistema('SP_EstadoPlazaTitular')))          
+ DECLARE @SP_EstadoPlazaIncapacidad INT =  (SELECT DISTINCT TOP 1 TitularidadId FROM Vw_Titularidad WITH (NOLOCK) WHERE Clave COLLATE SQL_Latin1_General_CP1_CI_AS =  (SELECT Valor FROM dbo.fn_VariableSistema('SP_EstadoPlazaIncapacidad')))          
+ 
+ 
+ --CREAMOS UNA TABLA TEMPORAL PARA ALOJAR LOS DATOS DE LAS INCIDENCIAS          
+ IF OBJECT_ID('tempdb..#TempCicloIncidencias') IS NOT NULL          
+ DROP TABLE #TempCicloIncidencias          
+ CREATE TABLE #TempCicloIncidencias (              
+      IdCodigoPersonal varchar(50),          
+      IdIncidencia varchar(50),             
+      IdCantidad float,             
+      IdFecha datetime,                  
+      Estatus int,          
+      Observaciones varchar(max),          
+      Ritmo INT,          
+      RolGuardia INT, 
+	  Frente VARCHAR(1), 
+	  PTrabajo VARCHAR(1),
+	  GeneraDevengado INT,
+	  IncidenciaDevengado varchar(50)
+	  )          
+                
+
+ --VARIABLES ESTADOS DE SOLICITUD          
+ DECLARE @EstadoAutorizado INT =  (SELECT valor FROM dbo.fn_VariableSistema('SP_Autorizada'))             
+          
+ --VARIABLES DE ROLGUARDIA           
+ DECLARE @6X1 INT = (SELECT Valor FROM fnVariableConfiguracion('Prenomina','PREN_RitmoRolGuardia06X01'))          
+ DECLARE @14X14 INT = (SELECT Valor FROM fnVariableConfiguracion('Prenomina','PREN_RitmoRolGuardia14X14'))          
+ DECLARE @28x14 INT = (SELECT Valor FROM fnVariableConfiguracion('Prenomina','PREN_RitmoRolGuardia28X14'))          
+ DECLARE @28x28 INT = (SELECT Valor FROM fnVariableConfiguracion('Prenomina','PREN_RitmoRolGuardia28X28'))          
+	  
+ --SELECCIONAMOS E INSERTAMOS TODOS LOS REGISTROS DE EVENTOS QUE CUMPLAN LOS CRITERIOS DEL CICLO          
+ INSERT INTO #TempCicloIncidencias          
+ SELECT                
+ NEN.CodigoPersonal,              
+ C.Concepto  Concepto,              
+ CASE WHEN LEFT(DP.DivisionPersonalNombre,1) = 'T' THEN C.ValorIncidenciaTierra WHEN LEFT(DP.DivisionPersonalNombre,1) = 'A' THEN C.ValorIncidenciaAbordo ELSE 0 END ParamNum1,             
+ EP.Fecha AS ParamDate1,               
+ 0 AS Estatus,          
+ '' AS Observaciones,          
+ PLAZA.RitmoId,          
+ PLAZA.RolGuardiaId, LEFT(DP.DivisionPersonalNombre,1) CodigoFrente, TP.Periodo,
+ ISNULL(c.GeneraDevengado,0) AS GeneraDevengado, 
+ Isnull(ConcDev.concepto,'') AS IncidenciaDevengado         
+ FROM Adr.EventoPersona AS EP          
+ CROSS APPLY (          
+  SELECT TOP 1 TBL.RolGuardiaId, VR.RitmoId, SolicitudPuestoPlazaId FROM(          
+   SELECT  PLAZA.RolGuardiaId, COB.SolicitudPuestoPlazaId, CASE WHEN CAST(GETDATE() AS DATE) <=  EP.Fecha THEN EP.Fecha ELSE NULL END Fecha          
+   FROM adr.CoberturaTemporal COB WITH (NOLOCK)          
+   INNER JOIN adr.SolicitudPuestoPlaza PLAZA WITH (NOLOCK) ON PLAZA.SolicitudPuestoPlazaId = COB.SolicitudPuestoPlazaId AND PLAZA.RegBorrado = 0          
+   Outer apply dbo.fn_arCalculoRolGuardia(PLAZA.RolGuardiaId,COB.Fecha,'es-MX') AS calculo           
+   WHERE cob.RegBorrado = 0 AND PLAZA.RegBorrado = 0 AND COB.EmpleadoId = EP.EmpleadoId          
+   AND EP.Fecha >= COB.Fecha          
+   AND EP.Fecha <= CASE WHEN ISNULL(COB.Dias, 0) != 0 THEN DATEADD(day, (COB.Dias - 1), COB.Fecha)          
+          WHEN ISNULL(COB.Dias, 0) = 0 AND Estado = 'T' THEN calculo.FechaUltimoDiaLaboral           
+          WHEN ISNULL(COB.Dias, 0) = 0 AND Estado = 'D' THEN DATEADD(day, -1, calculo.FechaSiguienteEmbarque) END          
+   UNION ----------------------------------------------------------------------------------          
+   SELECT  spp.RolGuardiaId, spp.SolicitudPuestoPlazaId, CASE WHEN CAST(GETDATE() AS DATE) <= EP.Fecha THEN EP.Fecha ELSE NULL END Fecha          
+   FROM ADR.SolicitudPuestoPlaza spp WITH (NOLOCK)          
+   INNER JOIN ADR.SolicitudPlantillaPuesto spp2 WITH (NOLOCK) ON SPP.SolicitudPlantillaPuestoId = spp2.SolicitudPlantillaPuestoId AND SPP2.RegBorrado = 0          
+   INNER JOIN ADR.SolicitudPlantilla sp WITH (NOLOCK) ON sp.SolicitudPlantillaId = spp2.SolicitudPlantillaId AND SP.RegBorrado = 0 AND SP.EstadoSolicitudId = @EstadoAutorizado          
+   WHERE SPP.PersonaId = EP.EmpleadoId AND SPP.RegBorrado = 0          
+   UNION          
+   SELECT TOP 1 H.RolGuardiaId, H.SolicitudPuestoPlazaId, Fecha          
+   FROM ADR.SolicitudPuestoPlazaHistorico H WITH (NOLOCK)          
+   WHERE H.PersonaId = EP.EmpleadoId          
+   AND H.Fecha = EP.Fecha          
+   AND H.TitularidadId = @SP_EstadoPlazaCobertura AND H.RegBorrado = 0          
+   UNION          
+   SELECT TOP 1  H.RolGuardiaId, H.SolicitudPuestoPlazaId, Fecha          
+   FROM ADR.SolicitudPuestoPlazaHistorico H WITH (NOLOCK)          
+   WHERE H.PersonaId = EP.EmpleadoId          
+   AND H.Fecha <= EP.Fecha          
+   AND H.TitularidadId IN (@SP_EstadoPlazaTitular, @SP_EstadoPlazaIncapacidad) AND H.RegBorrado = 0          
+   ORDER BY Fecha DESC                    
+  )TBL           
+  INNER JOIN Vw_RolGuardiaAtributo VR WITH (NOLOCK) ON VR.RolGuardiaId = TBL.RolGuardiaId          
+  WHERE TBL.FECHA IS NOT NULL           
+ ) AS PLAZA          
+ INNER JOIN adr.SolicitudPuestoPlaza AS P WITH (NOLOCK) ON PLAZA.SolicitudPuestoPlazaId = P.SolicitudPuestoPlazaId           
+ INNER JOIN adr.SolicitudPlantillaPuesto AS SPP WITH(NOLOCK) ON P.SolicitudPlantillaPuestoId = SPP.SolicitudPlantillaPuestoId           
+ INNER JOIN adr.SolicitudPlantilla AS SP WITH (NOLOCK) ON SPP.SolicitudPlantillaId = SP.SolicitudPlantillaId           
+ INNER JOIN empleado AS NEN WITH (NOLOCK)          
+     ON EP.EmpleadoId = NEN.CodigoPersonal           
+     AND NEN.Estatus = @estatusActivoEmpleado           
+     AND NEN.ClaveEmpresa = @ClaveEmpresa          
+     AND NEN.AreaTipoNomina = @TipoNomina          
+ INNER JOIN adr.TipoPago AS TP WITH (NOLOCK) ON EP.TipoPagoId = TP.TipoPagoId AND TP.RegBorrado = 0          
+ INNER JOIN adr.MotivoEvento AS ME WITH (NOLOCK) ON EP.MotivoId = ME.MotivoEventoId AND ME.RegBorrado = 0 --AND ME.OmiteIncidencia = 0          
+ INNER JOIN Posicion F ON F.ObjetoId = NEN.ObjetoIdPosicion      
+ INNER JOIN DivisionPersonal DP ON DP.DivisionPersonal = F.DivisionPersonal      
+ INNER JOIN adr.EventoConcepto EC WITH (NOLOCK) ON EC.RegBorrado = 0 AND EC.MotivoEventoId = EP.MotivoId AND EC.Periodo = CASE WHEN TP.Periodo = 'T' THEN 'T' WHEN TP.Periodo = 'D' THEN 'D' END          
+ INNER JOIN adr.Concepto C WITH (NOLOCK) ON C.RegBorrado = 0 AND C.ConceptoId = EC.ConceptoId AND C.EsDevengado  = 0         
+ INNER JOIN adr.ModuloConcepto AS MCC WITH (NOLOCK) ON C.ConceptoId = MCC.ConceptoId AND MCC.ModuloId = @ModuloCalculoIncidencias AND MCC.Aplica = 1 AND MCC.RegBorrado = 0          
+ --Devengados 
+ LEFT JOIN adr.Conceptodevengado AS ConfDev ON ConfDev.regBorrado  = 0 AND ConfDev.ConceptoId = C.ConceptoId
+ LEFT JOIN ADR.Concepto AS ConcDev on ConfDev.DevengadoId = ConcDev.Conceptoid and  ConcDev.regBorrado  = 0 AND ConcDev.EsDevengado  = 1
+ WHERE           
+ EP.RegBorrado = 0 AND EP.Estado = 1          
+ AND CONVERT(DATE,EP.Fecha) BETWEEN CONVERT(DATE,@FechaInicioRango) AND CONVERT(DATE,@FechaFinRango);           
+      
+	     
+          
+ /*### BLOQUE REGLAS INCIDENCIAS AH ###*/          
+   IF OBJECT_ID('tempdb..#IncidenciasAH') IS NOT NULL          
+   DROP TABLE #IncidenciasAH         
+   CREATE TABLE #IncidenciasAH ([IdCodigoPersonal] [varchar](50) NULL,          
+  [IdIncidencia] [varchar](50) NULL,[IdCantidad] [float] NULL,[IdFecha] [datetime] NULL,[Estatus] [int] NULL,          
+   [Observaciones] [varchar](max) NULL,Ritmo INT,RolGuardia INT, Frente VARCHAR(1), PTrabajo VARCHAR(1))                    
+          
+
+
+  DECLARE @SL_DetalleServicioHospDoble INT = (SELECT Valor FROM fn_VariableSistema('SL_DetalleServicioHospDoble'))          
+  DECLARE @SL_DetalleServicioHospTriple INT = (SELECT Valor FROM fn_VariableSistema('SL_DetalleServicioHospTriple'))                   
+  DECLARE @I_CiudadCarmenId INT = (SELECT Valor FROM dbo.fn_VariableSistema('I_CiudadCarmenId'))           
+          
+  --PERSONAS CON EVENTOS DE FALTA DENTRO DEL PERIODO          
+  DECLARE @EventoFalta INT = CONVERT(INT, (SELECT valor FROM dbo.fn_VariableSistema('EventoFaltaFaktorCaseta')))          
+  DECLARE @FaltaPersona TABLE (PersonaId INT)          
+  
+  INSERT INTO @FaltaPersona          
+  SELECT DISTINCT EP.EmpleadoId          
+  FROM adr.EventoPersona EP WITH (NOLOCK)          
+  INNER JOIN Empleado AS NEN WITH (NOLOCK) ON EP.EmpleadoId = NEN.CodigoPersonal AND NEN.Estatus = @estatusActivoEmpleado  AND NEN.ClaveEmpresa = @ClaveEmpresa           
+  WHERE EP.RegBorrado = 0 AND EP.Estado = 1 AND EP.Fecha BETWEEN @FechaInicioPeriodoProcesando AND @FechaFinPeriodoProcesando          
+  AND EP.MotivoId IN (SELECT DISTINCT MotivoEventoId FROM adr.MotivoEvento ME WHERE ME.RegBorrado = 0 AND ME.EventoId = @EventoFalta)          
+          
+  --EVENTOS DE 'INICIO DE GUARDIA' DE LAS PERSONAS CON FALTA          
+  DECLARE @TBLEventoInicioGuardia TABLE (FechaEvento DATETIME, PersonaId INT)
+            
+  INSERT INTO @TBLEventoInicioGuardia          
+  SELECT MIN(EP.Fecha), EP.EmpleadoId          
+  FROM adr.EventoPersona EP WITH (NOLOCK)          
+  INNER JOIN Empleado AS NEN WITH (NOLOCK) ON EP.EmpleadoId = NEN.codigopersonal AND NEN.Estatus = @estatusActivoEmpleado  AND NEN.ClaveEmpresa = @ClaveEmpresa           
+  WHERE EP.RegBorrado = 0 AND EP.Estado = 1 AND EP.Fecha BETWEEN @FechaInicioPeriodoProcesando AND @FechaFinPeriodoProcesando          
+  AND EP.MotivoId IN (SELECT Valor FROM dbo.fn_VariableSistema('I_MotivoEventoIdSustituiblePorFalta'))          
+  AND EP.EmpleadoId IN (SELECT PersonaId FROM @FaltaPersona)          
+  GROUP BY EP.EmpleadoId          
+          
+  ;WITH CTE_INCIDENCIASAH AS          
+  (SELECT IdCodigoPersonal,IdIncidencia,IdCantidad ,IdFecha,Estatus,Observaciones,Ritmo,RolGuardia,Frente,PTrabajo            
+   FROM #TempCicloIncidencias           
+   WHERE IdIncidencia COLLATE database_default IN (SELECT Valor FROM dbo.fn_VariableSistema('I_IncidenciaAH'))          
+  )          
+  INSERT INTO #IncidenciasAH          
+  SELECT I.*          
+  FROM CTE_INCIDENCIASAH I          
+  INNER JOIN Empleado AS NEN WITH (NOLOCK) ON I.IdCodigoPersonal COLLATE database_default = NEN.CodigoPersonal /*COLLATE database_default*/ AND NEN.ClaveEmpresa = @ClaveEmpresa   
+  INNER JOIN Posicion PO ON PO.ObjetoId = NEN.ObjetoIdPosicion AND ISNULL(PO.RegBorrado,0) = 0     
+  INNER JOIN DivisionPersonal DV ON DV.DivisionPersonal  = PO.DivisionPersonal AND ISNULL(DV.RegBorrado,0) = 0     
+  INNER JOIN Vw_Empresa VE WITH (NOLOCK) ON NEN.CodigoEmpresa = VE.IdRazonSocialEmpleado          
+  INNER JOIN EmpleadoDatosPersonales AS EDP  ON EDP.CodigoPersonal = NEN.CodigoPersonal AND ISNULL(EDP.RegBorrado,0) = 0         
+  INNER JOIN Ciudad CR ON CR.CiudadId = EDP.CiudadResidenciaId AND CR.ClaveEstado = EDP.EstadoResidencia AND CR.CiudadId != @I_CiudadCarmenId AND ISNULL(CR.RegBorrado ,0) = 0        
+  INNER JOIN Estado ES ON ES.ClaveEstado = CR.ClaveEstado AND ES.ClavePais = EDP.PaisResidencia AND ISNULL(ES.RegBorrado ,0) = 0      
+  LEFT JOIN @TBLEventoInicioGuardia IG ON IG.PersonaId = NEN.CodigoPersonal AND I.IdFecha = IG.FechaEvento          
+  OUTER APPLY fn_CalculoPrestacionesCosteo (IG.PersonaId, I.IdFecha, LEFT(DV.DivisionPersonalNombre,1) , 1) Prest          
+  WHERE IG.PersonaId IS NULL          
+  AND Prest.DetalleHospedaje in (@SL_DetalleServicioHospDoble, @SL_DetalleServicioHospTriple)          
+  AND VE.idRazonSocialU COLLATE database_default IN (SELECT Valor FROM dbo.fn_VariableSistema('I_EmpresasDisponiblesInNom'))          
+          
+  DELETE FROM #TempCicloIncidencias WHERE IdIncidencia COLLATE database_default  IN (SELECT Valor FROM dbo.fn_VariableSistema('I_IncidenciaAH'))          
+  
+
+  DELETE INC FROM #TempCicloIncidencias INC 
+				Outer apply dbo.fn_arCalculoRolGuardia(INC.RolGuardia, INC.IdFecha ,'es-MX') AS GUA 
+				WHERE INC.IdIncidencia in (select  valor from dbo.fn_VariableSistema('Concepto_IncapacidadInterna')) 
+				AND GUA.Estado = 'D' -- opb se eliminan eventos incapacidad en descanso          
+
+  DELETE FROM #TempCicloIncidencias WHERE IdIncidencia in (select  valor from dbo.fn_VariableSistema('Concepto_IncapacidadInterna'))  AND Frente = 'T' -- opb se eliminan eventos incapacidad en frente tierra          
+  DELETE FROM #TempCicloIncidencias WHERE IdIncidencia in (select  valor from dbo.fn_VariableSistema('Concepto_IncapacidadInterna'))  AND PTrabajo = 'D' -- opb se eliminan eventos incapacidad en periodo de descanso          
+              
+            
+  DELETE FROM #TempCicloIncidencias 
+		 WHERE IdIncidencia in (select  valor from dbo.fn_VariableSistema('Concepto_IncapacidadInterna'))  
+		 AND (IdCantidad = 0 OR  IdCantidad IS NULL) -- opb se eliminan eventos incapacidad en periodo de descanso          
+  
+  
+  INSERT INTO #TempCicloIncidencias(IdCodigoPersonal,IdIncidencia,IdCantidad ,IdFecha,Estatus,Observaciones,Ritmo,RolGuardia,Frente,PTrabajo)            
+  SELECT IdCodigoPersonal,IdIncidencia,IdCantidad ,IdFecha,Estatus,Observaciones,Ritmo,RolGuardia,Frente,PTrabajo FROM #IncidenciasAH          
+                   
+ /*### FIN DEL BLOQUE REGLAS INCIDENCIAS AH ###*/          
+          
+  
+  /*### BLOQUE DE DEVENGADOS ASISTENCIAS ###*/          
+      /*
+IN001	NORMAL
+IN013	PERMISO POR PATERNIDAD
+	  */         
+  --;WITH CTE_ASISTENCIAS_DEVENGADOS AS          
+  --(SELECT *           
+  -- FROM #TempCicloIncidencias           
+  -- WHERE IdIncidencia IN ('IN001','IN013')           
+  --)          
+  --INSERT INTO #IncidenciasDevengadosPaso          
+  --SELECT  IdCodigoPersonal,          
+  --   IncidenciaDevengado AS Concepto,            
+  -- CASE WHEN Ritmo = @6X1 THEN 1          
+  --   WHEN Ritmo = @14X14 THEN 1           
+  --   WHEN Ritmo = @28x28 THEN 1          
+  --   WHEN Ritmo = @28x14 THEN 0.5          
+  -- END AS ParamNum1,          
+  -- (SELECT [dbo].[fn_ObtenerFechaDevengado](RolGuardia,Ritmo,IdFecha)) AS ParamDate1,          
+  --Estatus,Observaciones,          
+  -- CASE WHEN Ritmo = @6X1 THEN 1          
+  --   WHEN Ritmo = @28x14 THEN 2          
+  --   ELSE 0       
+  -- END AS Agrupado          
+  --FROM CTE_ASISTENCIAS_DEVENGADOS WHERE IdFecha IS NOT NULL AND IdFecha != NULL;  
+        
+       
+	   --select * from adr.Concepto
+	   --where Concepto ='IN014'
+
+--##DUDA devengado a devengado   ##TASS       
+  --DEVEGANDO INCAPACIDAD -- opb se agrega concepto incapacidad IN014          
+  --;WITH CTE_ASISTENCIAS_DEVENGADOS AS          
+  --(SELECT *           
+  -- FROM #TempCicloIncidencias           
+  -- WHERE IdIncidencia IN ('IN014')           
+  --)          
+--  INSERT INTO #IncidenciasDevengadosPaso          
+--  SELECT  CTE.IdCodigoPersonal,'IN014' AS Concepto,       
+--   1 AS ParamNum1,-- ##Duda Fabian que pasa con los roles @28x14    
+--   (SELECT [dbo].[fn_ObtenerFechaDevengado](CTE.RolGuardia,CTE.Ritmo,CTE.IdFecha)) AS ParamDate1,          
+--    CTE.Estatus,CTE.Observaciones,          
+--   CASE WHEN CTE.Ritmo = @6X1 THEN 1          
+--     WHEN CTE.Ritmo = @28x14 THEN 2          
+--     ELSE 0               
+--   END AS Agrupado          
+--  FROM CTE_ASISTENCIAS_DEVENGADOS CTE 
+--  INNER JOIN adr.EventoPersona PER WITH (NOLOCK) ON 
+--	PER.Ficha COLLATE database_default = CTE.IdCodigoPersonal 
+--AND PER.Fecha = CTE.IdFecha 
+--AND PER.MotivoId = 40 
+--AND PER.Estado = 1 
+--AND PER.RegBorrado = 0          
+--  WHERE IdFecha IS NOT NULL AND IdFecha != NULL;           
+          
+  /*### FIN BLOQUE DE DEVENGADOS ASISTENCIAS ###*/          
+          
+
+  /*### BLOQUE DE DEVENGADOS FALTAS ###*/          
+
+  --IN008	FALTA    
+  --;WITH CTE_FALTAS_DEVENGADOS AS          
+  --(SELECT *           
+  -- FROM #TempCicloIncidencias           
+  -- WHERE IdIncidencia = 'IN008'            
+  --)          
+  --INSERT INTO #IncidenciasDevengadosPaso          
+  --SELECT  IdCodigoPersonal,IncidenciaDevengado AS Concepto,           
+  -- CASE WHEN Ritmo = @6X1 THEN 1          
+  --   WHEN Ritmo = @14X14 THEN 1           
+  --   WHEN Ritmo = @28x28 THEN 1          
+  --   WHEN Ritmo = @28x14 THEN 0.5          
+  -- END AS ParamNum1,     
+  -- (SELECT [dbo].[fn_ObtenerFechaDevengado](RolGuardia,Ritmo,IdFecha)) AS ParamDate1,          
+  --Estatus,Observaciones,          
+  -- CASE WHEN Ritmo = @6X1 THEN 1          
+  --   WHEN Ritmo = @28x14 THEN 2          
+  --   ELSE 0          
+  -- END AS Agrupado          
+  --FROM CTE_FALTAS_DEVENGADOS WHERE IdFecha IS NOT NULL AND IdFecha != NULL;  
+    
+          
+  --/*### FIN BLOQUE DE DEVENGADOS FALTAS ###*/   
+  
+
+    ;WITH CTE_FALTAS_DEVENGADOS AS          
+  (SELECT *           
+   FROM #TempCicloIncidencias           
+   WHERE GeneraDevengado =1           
+  )          
+  INSERT INTO #IncidenciasDevengadosPaso          
+  SELECT  IdCodigoPersonal,IncidenciaDevengado AS Concepto,            
+   1 AS ParamNum1,     
+   (SELECT [dbo].[fn_ObtenerFechaDevengado](RolGuardia,Ritmo,IdFecha)) AS ParamDate1,          
+  Estatus,Observaciones,          
+   CASE WHEN Ritmo = @6X1 THEN 1          
+     WHEN Ritmo = @28x14 THEN 2          
+     ELSE 0          
+   END AS Agrupado          
+  FROM CTE_FALTAS_DEVENGADOS WHERE IdFecha IS NOT NULL AND IdFecha != NULL;  
+  
+
+  
+         
+  DELETE FROM #TempCicloIncidencias WHERE IdIncidencia  in (select  valor from dbo.fn_VariableSistema('Concepto_IncapacidadInterna'))          
+           
+   --SI SE ENCONTRARON REGISTROS SE ENVIARÁN A LA TABLA REPOSITORIO          
+  INSERT INTO #IncidenciasProcesadas          
+   SELECT DISTINCT IdCodigoPersonal,IdIncidencia,IdCantidad,          
+   IdFecha,Estatus,Observaciones           
+  FROM #TempCicloIncidencias           
+  WHERE CONVERT(DATE,IdFecha) BETWEEN CONVERT(DATE,@FechaInicioPeriodoProcesando) AND CONVERT(DATE,@FechaFinPeriodoProcesando);               
+        
+  -- --INSERTAMOS LOS DEVENGADOS POR RITMO LOS 14X14,28X28 SE INSERTAN NORMAL          
+  INSERT INTO #IncidenciasDevengados          
+  SELECT DISTINCT IdCodigoPersonal,     
+   IdIncidencia,IdCantidad,          
+   IdFecha,       
+   Estatus,Observaciones             
+  FROM #IncidenciasDevengadosPaso WHERE Agrupado IN (0)          
+  AND CONVERT(DATE,IdFecha) BETWEEN CONVERT(DATE,@FechaInicioPeriodoProcesando) AND CONVERT(DATE,@FechaFinPeriodoProcesando)          
+          
+  -- INSERTAMOS LOS DEVENGADOS POR RITMO LOS 28X14 SE AGRUPAN PARA REMOVER REPETIDOS Y OBTENER EL MONTO EXACTO          
+  INSERT INTO #IncidenciasDevengados          
+  SELECT DISTINCT IdCodigoPersonal,           
+   IdIncidencia,SUM(IdCantidad),         
+   IdFecha,Estatus,Observaciones           
+  FROM #IncidenciasDevengadosPaso WHERE Agrupado IN (2)          
+  AND CONVERT(DATE,IdFecha) BETWEEN CONVERT(DATE,@FechaInicioPeriodoProcesando) AND CONVERT(DATE,@FechaFinPeriodoProcesando)          
+  GROUP BY IdCodigoPersonal,          
+    IdIncidencia,IdCantidad,         
+    IdFecha,Estatus,Observaciones          
+          
+  --INSERTAMOS LOS DEVENGADOS POR RITMO LOS 6X1 SE AGRUPAN PARA REMOVER REPETIDOS          
+  INSERT INTO #IncidenciasDevengados          
+  SELECT DISTINCT IdCodigoPersonal, IdIncidencia,IdCantidad,          
+   IdFecha,Estatus,Observaciones             
+  FROM #IncidenciasDevengadosPaso           
+  WHERE Agrupado IN (1)           
+  AND CONVERT(DATE,IdFecha) BETWEEN CONVERT(DATE,@FechaInicioPeriodoProcesando) AND CONVERT(DATE,@FechaFinPeriodoProcesando)          
+  GROUP BY IdCodigoPersonal,            
+   IdIncidencia,IdCantidad,     
+   IdFecha,Estatus,Observaciones           
+          
+          
+--Estos conceptos quedaran de la misma manera ??##DUDA Fabian 
+  --CONVERTIMOS LOS DEVENGADOS ENCONTRADOS EN PERIODO DE TRABAJO A COMPENSACIONES          
+  UPDATE          
+   ID          
+  SET           
+   ID.IdIncidencia = 'P07',          
+   ID.IdCantidad = 12          
+  FROM #IncidenciasDevengados AS ID          
+  INNER JOIN #IncidenciasProcesadas AS IP ON      
+             IP.IdCodigoPersonal = ID.IdCodigoPersonal            
+            AND CONVERT(DATE,IP.IdFecha) = CONVERT(DATE,ID.IdFecha)          
+            AND IP.IdIncidencia IN ('IN001','IN013')          
+  WHERE ID.IdIncidencia = 'IN004' --Aqui aplica para todos los devengados o solo          
+--IN004	Día Devengado
+--IN001	NORMAL
+--IN013	PERMISO POR PATERNIDAD
+
+
+          
+          
+  --VALIDAMOS SI LAS COMPENSACIONES CHOCAN CON COMPENSACIONES REGISTRADAS DE MANERA MANUAL Y ELIMINAMOS LAS CONVERTIDAS A PARTIR DE LOS DEVENGADOS          
+  DELETE           
+   IPDC          
+  FROM #IncidenciasDevengados AS IPDC          
+  INNER JOIN #IncidenciasProcesadas AS IPC ON IPDC.IdCodigoPersonal = IPC.IdCodigoPersonal            
+            AND CONVERT(DATE,IPDC.IdFecha) = CONVERT(DATE,IPC.IdFecha)          
+            AND IPC.IdIncidencia = 'P07'          
+  WHERE IPDC.IdIncidencia = 'P07'          
+          
+          
+  --INSERTAMOS LAS INCIDENCIAS DEVENGADAS AGRUPADAS Y LAS COMPENSACIONES EN LA TABLA DE INCIDENCIAS          
+  INSERT INTO #IncidenciasProcesadas          
+  SELECT * FROM #IncidenciasDevengados;            
+               
+  --RETORNAMOS LAS INCIDENCIAS RESULTANTES          
+  --SELECT * FROM #IncidenciasProcesadas WHERE ParamNum1 != 0 AND ParamDate1 IS NOT NULL           
+  SELECT IncPro.* FROM #IncidenciasProcesadas IncPro 
+  INNER JOIN adr.Concepto AS Conc On Conc.Concepto collate database_default =   IncPro.IdIncidencia collate database_default
+  WHERE IncPro.IdFecha IS NOT NULL AND Conc.Omitirenvio = 0 ---Se omiten envío de conceptos.        
+  GROUP BY IdCodigoPersonal,          
+    IdIncidencia,IdCantidad,          
+    IdFecha,Estatus,Observaciones               
+END 
