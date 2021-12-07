@@ -1,0 +1,64 @@
+ALTER FUNCTION [dbo].[fn_ConvierteTercia](@strNumero varchar(3)) RETURNS varchar(100)
+AS
+BEGIN
+	DECLARE @strNumAux 	VARCHAR(50)
+	DECLARE @digitoA 	tinyint,
+		@digitoB 	tinyint,
+		@digitoC 	tinyint
+	DECLARE @strPrefijo 	VARCHAR(15)
+	DECLARE @Tercia 	VARCHAR(100)
+
+	SET @strNumAux	= Right('00' + @strNumero,3)
+	SET @digitoA	= CONVERT(tinyint,Left(@strNumAux,1))
+	SET @digitoB	= CONVERT(tinyint,SUBSTRING(@strNumAux,2,1))
+	SET @digitoC	= CONVERT(tinyint,SUBSTRING(@strNumAux,3,1))
+	select @Tercia=case 
+			when @digitoA=0 and @digitoB=0
+				then dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=0 and @digitoB=1 and @digitoC between 0 and 9
+				then dbo.fn_ConvierteTeens(convert(varchar(1),@digitoC))
+			when @digitoA=0 and @digitoB=1 and @digitoC between 6 and 9 
+				then dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB)) + ' y ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=0 and @digitoB=2 and @digitoC=0 
+				then 'veinte'
+			when @digitoA=0 and @digitoB=2 and @digitoC between 1 and 9 
+				then 'veinti' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=0 and @digitoB between 3 and 9 and @digitoC=0 
+				then dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB))
+			when @digitoA=0 and @digitoB between 3 and 9 and @digitoC>0
+				then dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB)) + ' y ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=1 and @digitoB=0 and @digitoC=0 
+				then 'cien'
+			when @digitoA=1 and @digitoB=0 and @digitoC>0
+				then 'ciento ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=1 and @digitoB=1 and @digitoC between 0 and 5 
+				then 'ciento ' + dbo.fn_ConvierteTeens(convert(varchar(1),@digitoC))
+			when @digitoA=1 and @digitoB=1 and @digitoC between 6 and 9 
+				then 'ciento ' + dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB)) + ' y ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=1 and @digitoB=2 and @digitoC=0 
+				then 'ciento veinte'
+			when @digitoA=1 and @digitoB=2 and @digitoC>0
+				then 'ciento veinti' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA=1 and @digitoB>=3 and @digitoC=0 
+				then 'ciento ' + dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB))
+			when @digitoA=1 and @digitoB>=3 and @digitoC>0 
+				then 'ciento ' + dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB)) + ' y ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA>1 and @digitoB=0 and @digitoC=0 
+				then dbo.fn_nombreCientos(@digitoA)
+			when @digitoA>1 and @digitoB=0 and @digitoC>0
+				then dbo.fn_nombreCientos(@digitoA) + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA>1 and @digitoB=1 and @digitoC between 0 and 9 
+				then dbo.fn_nombreCientos(@digitoA) + dbo.fn_ConvierteTeens(convert(varchar(1),@digitoC))
+			when @digitoA>1 and @digitoB=1 and @digitoC > 5
+				then dbo.fn_nombreCientos(@digitoA) + dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB)) + ' y ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA>1 and @digitoB=2 and @digitoC=0 
+				then dbo.fn_nombreCientos(@digitoA) + ' veinte'
+			when @digitoA>1 and @digitoB=2 and @digitoC>0
+				then dbo.fn_nombreCientos(@digitoA) + ' veinti' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			when @digitoA>1 and @digitoB>2 and @digitoC=0 
+				then dbo.fn_nombreCientos(@digitoA) + dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB))
+			when @digitoA>1 and @digitoB>2 and @digitoC>0
+				then dbo.fn_nombreCientos(@digitoA) + dbo.fn_ConvierteDecimos(convert(varchar(1),@digitoB)) + ' y ' + dbo.fn_ConvierteUnidades(convert(varchar(1),@digitoC))
+			end
+	RETURN @Tercia
+End
