@@ -1,0 +1,234 @@
+ALTER PROCEDURE [adr].[st_ProcesaPrenominaHCM]
+AS
+BEGIN
+
+	DECLARE @ReturnTable TABLE (FechaInicio DATETIME, FechaFin DATETIME, MensajeError NVARCHAR(MAX), ClaveEmpresa NVARCHAR(50), 
+								NombreEmpresa NVARCHAR(150), TipoNomina NVARCHAR(10), TipoNominaDescripcion NVARCHAR(150), Periodo INT)
+	BEGIN TRANSACTION
+	BEGIN TRY
+
+		--VARIABLES DE CONFIGURACION
+		DECLARE @DiasProcesoPrenomina AS INT = (SELECT Valor FROM dbo.fn_VariableSistema('PREN_DiasEjecucionProcesoAutomatico'))
+
+		--CREAMOS UNA TABLA PARA ALMACENAR LAS EMPRESAS REGISTRADAS EN EL LOG
+		DECLARE @EmpresasProceso TABLE (Id INT, EmpresaId INT)
+
+		--INSERTAMOS LOS REGISTROS DE LAS EMPRESAS ENCONTRADAS
+		INSERT INTO @EmpresasProceso
+		SELECT DISTINCT
+		DENSE_RANK() OVER(ORDER BY EmpresaId ASC),EmpresaId
+		FROM adr.LogPrenominaProcesadaHCM WHERE RegBorrado = 0;
+
+
+		DECLARE @iEmpresa INT = 1
+		DECLARE @FinCicloEmpresa INT = (SELECT COUNT(*) FROM @EmpresasProceso) 
+
+		--RECORREMOS LAS EMPRESAS UNA POR UNA 
+		WHILE @iEmpresa <= @FinCicloEmpresa
+		BEGIN
+			--OBTENEMOS LA EMPRESA EN CURSO
+			DECLARE @Empresa INT = (SELECT EmpresaId FROM @EmpresasProceso WHERE Id = @iEmpresa)
+
+			--DURANTE EL RECORRIDO DE LAS EMPRESAS CREAMOS UNA TABLA PARA OBTENER LOS TIPOS DE NÓMINA
+			DECLARE @TipoNominaProceso TABLE (Id INT, TipoNomina VARCHAR(10))
+			--INSERTAMOS LOS REGISTROS DE LOS TIPOS DE NOMINA DE LA EMPRESA EN EN CICLO
+			INSERT INTO @TipoNominaProceso
+			SELECT DISTINCT
+			DENSE_RANK() OVER(ORDER BY TipoNomina ASC),TipoNomina
+			FROM adr.LogPrenominaProcesadaHCM WHERE EmpresaId = @Empresa AND RegBorrado = 0;
+
+			DECLARE @iTipoNomina INT = 1
+			DECLARE @FinCicloTipoNomina INT = (SELECT COUNT(*) FROM @TipoNominaProceso)
+
+			--RECORREMOS LOS TIPOS DE NOMINA DE LA EMPRESA UNO A UNO E INICIAMOS EL PROCESO
+			WHILE @iTipoNomina <= @FinCicloTipoNomina
+			BEGIN	
+
+				--OBTENEMOS EL TIPO DE NOMINA EN CURSO
+				DECLARE @TipoNomina VARCHAR(10) = (SELECT TipoNomina FROM @TipoNominaProceso WHERE Id = @iTipoNomina)
+
+				--INICIAMOS EL PROCESO DE LA PRENOMINA
+				DECLARE @FechaCurso DATETIME = GETDATE()
+				DECLARE @AnioCurso AS INT = YEAR(GETDATE()) --<== Es el año en curso al momento de ejecutar el proceso, equivalente al año del periodo consecutivo al que se está procesando
+
+				--OBTENEMOS EL PERIODO POR PROCESAR/PROCESANDO EN LA TABLA DE LOG (DESPUES DEL PROCESO SE CONVIERTE EN EL PERIODO PROCESADO)
+				DECLARE @PeriodoProcesando AS INT = (SELECT PeriodoSiguiente FROM adr.LogPrenominaProcesadaHCM WHERE EmpresaId = @Empresa AND TipoNomina = @TipoNomina AND RegBorrado = 0)
+				DECLARE @FechaInicioPeriodoProcesando AS DATETIME = (SELECT FechaInicioPeriodoSiguiente FROM adr.LogPrenominaProcesadaHCM WHERE EmpresaId = @Empresa AND TipoNomina = @TipoNomina AND RegBorrado = 0)
+				DECLARE @FechaFinPeriodoProcesando AS DATETIME = (SELECT FechaFinPeriodoSiguiente FROM adr.LogPrenominaProcesadaHCM WHERE EmpresaId = @Empresa AND TipoNomina = @TipoNomina AND RegBorrado = 0)
+				DECLARE @FechaPagoPeriodoProcesando AS DATETIME = (SELECT FechaPagoPeriodoSiguiente FROM adr.LogPrenominaProcesadaHCM WHERE EmpresaId = @Empresa AND TipoNomina = @TipoNomina AND RegBorrado = 0)
+				DECLARE @AnioPeriodoProcesando AS INT = YEAR(@FechaFinPeriodoProcesando)
+
+				--OBTENEMOS EL PERIODO SIGUIENTE (DESPUÉS DEL PROCESO) PARA INSERTAR EN LA TABLA DE LOG		
+				DECLARE @PeriodoSiguiente AS INT =					ISNULL((SELECT TOP 1 Periodo FROM dbo.CalendarioNomina  --<== Es el periodo en curso al momento de la ejecución, este será el siguiente en procesar
+																	WHERE
+																	AreaNomina = @TipoNomina
+																	AND Anio = @AnioCurso
+																	AND FechaInicio <= @FechaCurso AND FechaFin >= @FechaCurso
+																	ORDER BY Periodo DESC),0)
+				DECLARE @FechaInicioPeriodoSiguiente AS DATETIME = (SELECT TOP 1 FechaInicio FROM dbo.CalendarioNomina
+																	WHERE
+																	AreaNomina = @TipoNomina
+																	AND Anio= @AnioCurso AND Periodo = @PeriodoSiguiente)
+				DECLARE @FechaFinPeriodoSiguiente AS DATETIME =		(SELECT TOP 1 FechaFin FROM dbo.CalendarioNomina
+																	WHERE
+																	AreaNomina = @TipoNomina
+																	AND Anio= @AnioCurso AND Periodo = @PeriodoSiguiente)
+				DECLARE @FechaPagoPeriodoSiguiente AS DATETIME =	(SELECT TOP 1 FechaPago FROM dbo.CalendarioNomina
+																	WHERE 
+																	AreaNomina = @TipoNomina
+																	AND Anio = @AnioCurso AND Periodo = @PeriodoSiguiente)
+
+				--EVALUAMOS SI EXISTE UNA DIFERENCIA DE DOS DÍAS ENTRE LA FECHA DE PAGO DEL PERIODO Y LA FECHA EN CURSO
+				IF (DATEDIFF(DAY,@FechaFinPeriodoProcesando,@FechaCurso) >= @DiasProcesoPrenomina)
+				BEGIN		
+							
+					IF OBJECT_ID(N'tempdb..#IncidenciasProcesadasAutomatico') IS NOT NULL   
+					BEGIN
+						DROP TABLE #IncidenciasProcesadasAutomatico;  
+					END
+
+					CREATE TABLE #IncidenciasProcesadasAutomatico ( 
+					[IdCodigoPersonal] [varchar](50) NOT NULL,-- original -> idempleado
+					[IdIncidencia] [varchar](50)NOT NULL,--original -> concepto
+					[IdCantidad] [float] NOT NULL,--original -> paramnum1
+					[IdFecha] [datetime] NOT NULL,
+					[Estatus] [int] NOT NULL,
+					[Observaciones] [varchar](max) NULL
+					 )    
+					--INSERTAMOS LAS INCIDENCIAS RESULTANTES DEL CALCULO DE INCIDENCIAS
+					INSERT INTO #IncidenciasProcesadasAutomatico
+					EXEC [dbo].[st_CalculoPrenominaHCM] @Empresa,@TipoNomina,@PeriodoProcesando,@FechaInicioPeriodoProcesando,@FechaFinPeriodoProcesando,NULL;
+
+
+					--PURGAMOS LAS INCIDENCIAS PARA NO ENVIAR LAS INCIDENCIAS QUE YA ESTÉN EN LA TABLA Y ESTEN PROCESADAS
+					DELETE IPA
+					FROM #IncidenciasProcesadasAutomatico AS IPA
+					INNER JOIN adr.IncidenciasADRHCM AS ADR ON ADR.IdCodigoPersonal  = IPA.IdCodigoPersonal COLLATE DATABASE_DEFAULT
+															AND ADR.IdIncidencia COLLATE DATABASE_DEFAULT = IPA.IdIncidencia COLLATE DATABASE_DEFAULT
+															--AND ADR.IdCantidad = IPA.IdCantidad
+															AND CONVERT(DATE,ADR.IdFecha) = CONVERT(DATE,IPA.IdFecha)
+															AND ADR.Estatus = 1
+										
+					--VALIDAMOS SI SE OBTUVIERON REGISTROS Y SI ES ASÍ, REALIZAMOS LA INSERCION
+					DECLARE @ContadorValida INT = ISNULL((SELECT COUNT(*) FROM #IncidenciasProcesadasAutomatico),0)
+					IF @ContadorValida > 0 
+					BEGIN						
+
+						--SE INICIA UN MERGE DE LAS INCIDENCIAS ENTRE LA TABLA DE INCIDENCIAS RECUPERADAS Y LA TABLA DE DESTINO PARA EVITAR DUPLICADOS
+						MERGE adr.IncidenciasADRHCM AS TARGET USING (
+							SELECT
+								IdCodigoPersonal,
+								IdIncidencia,
+								IdCantidad,
+								IdFecha,
+								Estatus,
+								Observaciones
+							FROM #IncidenciasProcesadasAutomatico
+						) AS SOURCE (
+							IdCodigoPersonal,
+							IdIncidencia,
+							IdCantidad,
+							IdFecha,
+							Estatus,
+							Observaciones)
+						ON (
+							TARGET.IdCodigoPersonal  = SOURCE.IdCodigoPersonal COLLATE DATABASE_DEFAULT AND
+							TARGET.IdIncidencia COLLATE DATABASE_DEFAULT = SOURCE.IdIncidencia COLLATE DATABASE_DEFAULT AND
+							CONVERT(DATE,TARGET.IdFecha)=CONVERT(DATE,SOURCE.IdFecha) AND
+							TARGET.Estatus IN (0,2)				
+							)
+						WHEN MATCHED THEN 
+							UPDATE SET 
+								IdCantidad = SOURCE.IdCantidad,
+								Estatus = SOURCE.Estatus,
+								Observaciones = SOURCE.Observaciones			
+						WHEN NOT MATCHED THEN
+							INSERT (
+								IdCodigoPersonal,
+								IdIncidencia,
+								IdCantidad,
+								IdFecha,
+								Estatus,
+								Observaciones
+							) VALUES (
+								SOURCE.IdCodigoPersonal,
+								SOURCE.IdIncidencia,
+								SOURCE.IdCantidad,
+								SOURCE.IdFecha,
+								SOURCE.Estatus,
+								SOURCE.Observaciones					
+							);									
+					END
+
+					--ACTUALIZAMOS LA TABLA DE LOG
+					UPDATE adr.LogPrenominaProcesadaHCM SET
+						PeriodoProcesado = @PeriodoProcesando,
+						AnioPeriodoProcesado = @AnioPeriodoProcesando,
+						FechaInicioPeriodoProcesado = @FechaInicioPeriodoProcesando,
+						FechaFinPeriodoProcesado = @FechaFinPeriodoProcesando,
+						FechaPagoPeriodoProcesado = @FechaPagoPeriodoProcesando,
+						Procesada = 1,
+						FechaEjecucion = @FechaCurso,
+						CantProcesada = @ContadorValida,
+						PeriodoSiguiente = @PeriodoSiguiente,
+						FechaInicioPeriodoSiguiente = @FechaInicioPeriodoSiguiente,
+						FechaFinPeriodoSiguiente = @FechaFinPeriodoSiguiente,
+						FechaPagoPeriodoSiguiente = @FechaPagoPeriodoSiguiente,
+						Observaciones = 'Se ha procesado correctamente la nómina',
+						RegBorrado = 0
+					WHERE EmpresaId = @Empresa AND TipoNomina = @TipoNomina AND RegBorrado = 0;	
+
+					--INSERTAMOS EL REGISTRO DE LA NOMINA QUE SE PROCESÓ (EMPRESA Y AREA NOMINA) PARA REALIZAR LAS NOTIFICACIONES POR CORREO
+					DECLARE @NombreEmpresa varchar(150);
+					DECLARE @ClaveEmpresa varchar(50);
+					DECLARE @TipoNominaDescripcion varchar(150);
+
+					SELECT TOP 1 
+						@NombreEmpresa = Nombre, 
+						@ClaveEmpresa = ClaveEmpresa 
+					FROM Empresa 
+					WHERE ClaveEmpresa = CONVERT(NVARCHAR(100),@Empresa)
+
+					SELECT TOP 1 
+						@TipoNominaDescripcion= Descripcion
+					FROM AreaNomina where AreaNomina = @TipoNomina
+					
+					INSERT INTO @ReturnTable(FechaInicio, FechaFin, MensajeError, ClaveEmpresa, NombreEmpresa, TipoNomina, 
+											TipoNominaDescripcion, Periodo) 
+					VALUES(@FechaInicioPeriodoProcesando, @FechaFinPeriodoProcesando, NULL, @ClaveEmpresa, @NombreEmpresa, @TipoNomina, 
+											@TipoNominaDescripcion, @PeriodoProcesando);
+				END
+
+				--INCREMENTAMOS EL CICLO DE LOS TIPOS DE NOMINA
+				SET @iTipoNomina = @iTipoNomina + 1
+			END
+
+			--LIMPIAMOS LA TABLA DE TIPOS DE NOMINAS
+			DELETE FROM @TipoNominaProceso
+			--INCREMENTAMOS EL CICLO DE LAS EMPRESAS
+			SET @iEmpresa = @iEmpresa + 1
+		END 
+
+	COMMIT TRANSACTION
+	END TRY
+
+	BEGIN CATCH
+		ROLLBACK TRANSACTION
+
+		--SI EXISTE UN ERROR REALIZAREMOS LA INSERCION DEL ERROR EN EL LOG DE ERRORES
+		DECLARE @IdLogError INT = ISNULL((SELECT MAX(Id) FROM adr.LogErrorProcesoPrenomina),0) + 1
+		DECLARE @DescripcionError VARCHAR(MAX) = ERROR_MESSAGE()
+		DECLARE @LineaError INT = ERROR_LINE()
+		DECLARE @FechaError DATETIME = GETDATE() 
+
+		INSERT INTO adr.LogErrorProcesoPrenomina (Id,Descripcion,Linea,Fecha,RegBorrado)
+		VALUES (@IdLogError,@DescripcionError,@LineaError,@FechaError,0)
+
+		DELETE FROM @ReturnTable;
+        INSERT INTO @ReturnTable(FechaInicio, FechaFin, MensajeError)  
+		VALUES (NULL, NULL,ERROR_MESSAGE());
+
+	END CATCH
+
+	SELECT * FROM @ReturnTable 
+END --FIN DE SP
