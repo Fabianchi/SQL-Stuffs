@@ -1,0 +1,18 @@
+CREATE TYPE [dbo].[ttModuloConcepto] AS TABLE(
+	[ModuloId] [int] NULL,
+	[Aplica] [bit] NULL
+)
+GO
+
+
+CREATE TYPE [adr].[ttIncidenciasHCM] AS TABLE(
+	[IdIncidencia] [varchar](50) NULL,
+	[IdCodigoPersonal] [int] NOT NULL,
+	[IdFecha] [datetime] NOT NULL,
+	[IdCantidad] [decimal](18, 0) NOT NULL,
+	[Estatus] [int] NOT NULL,
+	[Observaciones] [varchar](max) NULL
+)
+GO
+
+
