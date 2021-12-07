@@ -1,0 +1,26 @@
+ALTER FUNCTION [dbo].[fn_ConvierteDecimos](@strDigito tinyint) returns varchar(10)
+AS 
+BEGIN
+	DECLARE @Decimos varchar(10)
+	select @Decimos=case @strDigito
+		when 1
+			then 'diez'
+		when 2
+			then 'veinte'
+		when 3
+			then 'treinta'
+		when 4
+			then 'cuarenta'
+		when 5
+			then 'cincuenta'
+		when 6
+			then 'sesenta'
+		when 7
+			then 'setenta'
+		when 8
+			then 'ochenta'
+		when 9
+			then 'noventa'
+	end
+	RETURN @Decimos
+End
