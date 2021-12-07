@@ -1,0 +1,16 @@
+ALTER FUNCTION [dbo].[fn_NombreCientos](@digito tinyint) RETURNS varchar(20)
+AS
+BEGIN
+		DECLARE @aux varchar(20)
+		select  @aux=case @digito
+		when 5
+			then 'quinientos '
+		when 7
+			then 'setecientos '
+		when 9
+			then 'novecientos '
+		else
+			dbo.fn_ConvierteUnidades(convert(varchar(1),@digito)) + 'cientos '
+		end
+		RETURN @aux
+END
