@@ -1,0 +1,28 @@
+ALTER FUNCTION [dbo].[fn_ConvierteUnidades](@strDigito tinyint) returns varchar(10)
+AS
+BEGIN
+	DECLARE @Unidad varchar(10)
+	select @Unidad=case @strDigito
+		when 0
+			then 'cero'
+		when 1
+			then 'un'
+		when 2
+			then 'dos'
+		when 3
+			then 'tres'
+		when 4
+			then 'cuatro'
+		when 5
+			then 'cinco'
+		when 6
+			then 'seis'
+		when 7
+			then 'siete'
+		when 8
+			then 'ocho'
+		when 9
+			then 'nueve'
+	end
+	RETURN @Unidad
+End
