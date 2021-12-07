@@ -1,0 +1,38 @@
+ALTER PROCEDURE [dbo].[st_SelPagApplicationLog]
+@Interface AS VARCHAR(50) = NULL,
+@Process AS VARCHAR(100) = NULL,
+@Type AS VARCHAR(50) = NULL,
+@DateStart AS DATE = NULL,
+@DateEnd AS DATE = NULL,
+--pager parameters
+@SortBy AS VARCHAR(100) = NULL,
+@Start AS INT = 1,
+@Limit AS INT = 100
+AS
+BEGIN
+
+SELECT Interface,
+		Process,
+		Type,
+		DateUTC,
+		Message,
+		Params,
+		Response,
+		Detail,
+		@Start AS Start,
+		@Limit AS Limit,
+		COUNT(*) OVER() AS [Count]
+FROM dbo.ApplicationLog
+WHERE (UPPER(Interface) = UPPER(@Interface) OR @Interface IS NULL)
+AND (UPPER(Process) =  UPPER(@Process) OR @Process IS NULL)
+AND (UPPER(Type) = UPPER(@Type) OR @Type IS NULL)
+AND (CONVERT(DATE,DateUTC) BETWEEN CONVERT(DATE,@DateStart) AND CONVERT(DATE,@DateEnd)
+	 OR (@DateStart IS NULL AND @DateEnd IS NULL)
+	 OR (CONVERT(DATE,DateUTC) >= CONVERT(DATE,@DateStart) AND @DateEnd IS NULL)
+	 OR (CONVERT(DATE,DateUTC) <= CONVERT(DATE,@DateEnd) AND @DateStart IS NULL)
+	)
+ORDER BY DateUTC DESC
+OFFSET ((@Start - 1) * @Limit) ROWS
+FETCH NEXT @Limit ROWS ONLY;
+
+END
