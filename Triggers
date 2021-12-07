@@ -1,0 +1,58 @@
+CREATE TRIGGER [dbo].[tU_ApplicationLog] ON [dbo].[ApplicationLog]
+   AFTER UPDATE
+AS 
+BEGIN
+  SET NOCOUNT ON;
+  
+  UPDATE [dbo].[ApplicationLog]
+  SET DateUTC = dbo.ApplicationLog.DateUTC,
+  	  Type = (UPPER(LEFT(Inserted.[Type],1)) + LOWER(RIGHT(Inserted.[Type],LEN(Inserted.[Type])-1)))
+  FROM [dbo].ApplicationLog
+  JOIN Inserted ON [dbo].[ApplicationLog].[ApplicationLogId]=Inserted.[ApplicationLogId] 
+END
+
+
+CREATE TRIGGER [dbo].[tI_ApplicationLog] ON [dbo].[ApplicationLog]
+   AFTER INSERT
+AS 
+BEGIN
+  SET NOCOUNT ON;
+  
+  UPDATE [dbo].[ApplicationLog]
+  SET --dbo.ApplicationLog.DateUTC = GETDATE(),  
+		Type = (UPPER(LEFT(Inserted.[Type],1)) + LOWER(RIGHT(Inserted.[Type],LEN(Inserted.[Type])-1)))
+  FROM [dbo].[ApplicationLog]
+  JOIN Inserted ON [dbo].[ApplicationLog].[ApplicationLogId]=Inserted.[ApplicationLogId]
+END
+
+
+ALTER TRIGGER [dbo].[tU_ApplicationTimer] ON [dbo].[ApplicationTimer]
+   AFTER UPDATE
+AS 
+BEGIN
+  SET NOCOUNT ON;
+  
+  UPDATE [dbo].[ApplicationTimer]
+  SET RegReviewer=UPPER(SYSTEM_USER),
+      RegRevDate=GETDATE(),
+      RegRevHost=HOST_NAME()
+  FROM [dbo].ApplicationTimer
+  JOIN Inserted ON [dbo].[ApplicationTimer].[ApplicationTimerId]=Inserted.[ApplicationTimerId]
+END
+
+
+ALTER TRIGGER [dbo].[tI_ApplicationTimer] ON [dbo].[ApplicationTimer]
+   AFTER INSERT
+AS 
+BEGIN
+  SET NOCOUNT ON;
+  
+  UPDATE [dbo].[ApplicationTimer]
+  SET RegDeleted=ISNULL(Inserted.RegDeleted,0),
+	  RegCreator=UPPER(SYSTEM_USER),
+	  RegCreDate=GETDATE(),
+	  RegCreHost=HOST_NAME()         
+  FROM [dbo].[ApplicationTimer]
+  JOIN Inserted ON [dbo].[ApplicationTimer].[ApplicationTimerId]=Inserted.[ApplicationTimerId]
+END
+
