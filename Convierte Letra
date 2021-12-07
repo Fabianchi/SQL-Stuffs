@@ -1,0 +1,48 @@
+ALTER FUNCTION [dbo].[fn_ConvierteALetra](@strNumero numeric(18,2)) RETURNS varchar(500)
+AS BEGIN
+
+--declare @strNumero	numeric(18,2)
+--SET @strNumero=500000
+	DECLARE @strTemp 	varchar(20), @strDecimales varchar(2)
+	DECLARE @iPosicion 	tinyint
+	DECLARE @strValor 	varchar(3)
+	DECLARE @strResult1 	varchar(300),
+		@strResult2	varchar(500)
+	SET @iPosicion=0
+	SET @strTemp=convert(varchar(20),@strNumero)
+	If CHARINDEX('.',@strTemp)>0
+		SET @strDecimales=RIGHT('00'+ SUBSTRING(@strTemp,CHARINDEX('.',@strTemp)+1,2),2)
+	Else
+		SET @strDecimales='00'
+	SET @strTemp=SUBSTRING(@strTemp,1,CHARINDEX('.',@strTemp)-1)
+	SET @strTemp=Right('000000000' + replace(@strTemp,'-',''),9)
+--PRINT @strTemp
+	SET @iPosicion=0
+	SET @strResult1=''
+	SET @strResult2=''
+	WHILE @iPosicion<=2
+	begin
+		SET @strValor=SUBSTRING(@strTemp,(3*@iPosicion)+1,1) + SUBSTRING(@strTemp,(3*@iPosicion)+2,1) + SUBSTRING(@strTemp,(3*@iPosicion)+3,1)
+		if @strValor<>'000' or (@iPosicion=2 and @strResult2='')
+		begin
+--PRINT @iPosicion
+--PRINT @strValor
+			SELECT @strResult1=dbo.fn_ConvierteTercia(@strValor)
+--PRINT @strResult1
+			SELECT @strResult2=CASE @iPosicion
+				when 0 then rtrim(@strResult1) + ' millones '
+				when 1 then @strResult2 + rtrim(@strResult1) + ' mil '
+				else @strResult2 + rtrim(@strResult1)
+				end
+
+			IF @strResult2='un millones ' 
+				SET @strResult2='un millon '
+--PRINT @strResult2
+--PRINT '---'
+		end
+		SET @iPosicion=@iPosicion + 1
+	end
+	SELECT @strResult2 = UPPER(left(@strResult2,1)) + RIGHT(RTRIM(@strResult2),LEN(RTRIM(@strResult2))-1)
+--PRINT @strResult2
+	RETURN @strResult2+' pesos '+@strDecimales+'/100 M.N.'
+End
