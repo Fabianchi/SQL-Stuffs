@@ -1,0 +1,69 @@
+ALTER PROCEDURE [adr].[st_InsUpdModuloConcepto]
+	@ConceptoId AS INT,
+	@ModuloConcepto dbo.ttModuloConcepto READONLY
+AS
+BEGIN 	
+	SET NOCOUNT ON;
+	DECLARE @TblResult AS TABLE(EsError INT, Descripcion NVARCHAR(1000), Linea INT, Asunto NVARCHAR(100));
+
+BEGIN TRY
+
+	DECLARE @TblInsertModuloConcepto AS TABLE(Numero INT, ModuloId INT, Aplica BIT);
+	INSERT INTO @TblInsertModuloConcepto
+	SELECT ROW_NUMBER() OVER(ORDER BY ModuloId ASC),
+		   ModuloId,
+		   Aplica
+	FROM @ModuloConcepto;
+
+	DECLARE @i AS INT = 1;
+	DECLARE @l AS INT = (SELECT COUNT(*) FROM @TblInsertModuloConcepto);
+
+	WHILE @i <= @l
+	BEGIN
+			
+		DECLARE @ModuloConceptoId AS INT = ISNULL((SELECT MAX(ModuloConceptoId) FROM [adr].[ModuloConcepto]),0)+1;
+		DECLARE @ModuloId AS INT = (SELECT TOP 1 ModuloId FROM @TblInsertModuloConcepto WHERE Numero = @i)
+		DECLARE @Aplica AS BIT = (SELECT TOP 1 Aplica FROM @TblInsertModuloConcepto WHERE Numero = @i)
+		
+		MERGE adr.ModuloConcepto AS TARGET USING 
+		(SELECT 
+			@ModuloConceptoId,
+			@ModuloId,
+			@ConceptoId,
+			@Aplica
+		) 
+		AS SOURCE (
+			ModuloConceptoId,
+			ModuloId,
+			ConceptoId,
+			Aplica
+		)
+		ON (TARGET.ModuloId = SOURCE.ModuloId AND TARGET.ConceptoId = SOURCE.ConceptoId)
+		WHEN MATCHED THEN
+		 UPDATE SET 
+			[Aplica]= ISNULL(SOURCE.Aplica,0)
+		WHEN NOT MATCHED THEN 
+		INSERT (
+			[ModuloConceptoId],
+			[ModuloId],
+			[ConceptoId],
+			[Aplica])
+		VALUES (
+			SOURCE.ModuloConceptoId,
+			SOURCE.ModuloId,
+			SOURCE.ConceptoId,
+			SOURCE.Aplica
+			); 
+
+		SET @i = @i + 1;
+	END
+
+END TRY
+BEGIN CATCH
+	INSERT INTO @TblResult
+	SELECT 1,ERROR_MESSAGE(),ERROR_LINE(),'Error TryCatch';
+END CATCH
+
+SELECT * FROM @TblResult
+END
+--Finalizado 23/07/2018
