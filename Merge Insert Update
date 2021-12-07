@@ -1,0 +1,35 @@
+ALTER PROCEDURE [dbo].[st_InsUpdApplicationTimer]
+@Interface AS VARCHAR(50),
+@Process AS VARCHAR(100),
+@LastExecution AS DATETIME
+AS
+BEGIN
+
+MERGE ApplicationTimer AS TARGET
+USING (SELECT 
+	   @Interface,
+	   @Process,
+	   @LastExecution
+	  )
+AS SOURCE ([Interface],
+		   [Process],
+		   [LastExecution]
+		   )
+ON (SOURCE.Interface = TARGET.Interface
+	AND SOURCE.Process = TARGET.Process)
+WHEN MATCHED THEN
+	UPDATE SET
+	TARGET.LastExecution = SOURCE.LastExecution
+WHEN NOT MATCHED THEN 
+	INSERT (
+	[Interface],
+	[Process],
+	[LastExecution]
+    )
+	VALUES (
+	SOURCE.Interface,
+	SOURCE.Process,
+	SOURCE.LastExecution
+	);
+
+END
