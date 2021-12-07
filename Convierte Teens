@@ -1,0 +1,29 @@
+ALTER Function [dbo].[fn_ConvierteTeens](@strDigito tinyint) returns varchar(10)
+AS
+begin
+	DECLARE @Teen varchar(10)
+	select @Teen=case @strDigito
+		when 0
+			then 'diez'
+		when 1
+			then 'once'
+		when 2
+			then 'doce'
+		when 3
+			then 'trece'
+		when 4
+			then 'catorce'
+		when 5
+			then 'quince'
+		when 6
+			then 'dieciseis'
+		when 7
+			then 'diecisiete'
+		when 8
+			then 'dieciocho'
+		when 9
+			then 'diecinueve'
+	end
+	RETURN @Teen
+end
+
