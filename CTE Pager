@@ -1,0 +1,83 @@
+ALTER PROCEDURE [sch].[st_SelPagNomina]
+--Sección de parametros
+@Ficha NVARCHAR(150)
+,@Anio INT
+,@IdTipoNominaProc NVARCHAR(50)
+--Parametros de paginación--
+,@InitialRow INT=0
+,@RowsRetrieve INT=10
+--Parametros de ordenamiento--
+,@SortColumn NVARCHAR(30) = 'FECHA'
+,@SortOrder NVARCHAR(4)='DESC'
+AS
+BEGIN
+
+DECLARE @EstadoEmpleadoActivo AS INT = CONVERT(INT,(SELECT Valor FROM dbo.fn_VariableSistema('EstatusEmpleadoActivo')));
+
+----Parametros de paginación--
+-- @LInitialRow INT=0
+--,@LRowsRetrieve INT=10
+----Parametros de ordenamiento--
+--,@LSortColumn NVARCHAR(30)
+--,@LSortOrder NVARCHAR(4)='DESC'
+
+DECLARE 
+@lFirstRec INT,
+ @lLastRec INT,
+ @lTotalRows INT
+
+SET @lFirstRec = ( @InitialRow)
+SET @lLastRec = ( @InitialRow + @RowsRetrieve + 1 )
+SET @lTotalRows = @lFirstRec - @lLastRec + 1
+
+; WITH CTE_RESULT AS 
+(
+	SELECT  
+	ROW_NUMBER() OVER (ORDER BY 
+	CASE WHEN (@SortColumn='FECHA' AND @SortOrder='ASC') THEN FechaPago END ASC, 
+	CASE WHEN (@SortColumn='FECHA' AND @SortOrder='DESC') THEN FechaPago END DESC, 
+	CASE WHEN (@SortColumn='PERIODO' AND @SortOrder='ASC') THEN Periodo END ASC, 
+	CASE WHEN (@SortColumn='PERIODO' AND @SortOrder='DESC') THEN Periodo END DESC 
+	) AS ROWNUM,
+	COUNT(*) OVER() AS TOTALCOUNT, 
+	ROW_NUMBER() OVER(ORDER BY Periodo) AS NominaId,
+	N.CodigoPersonal AS Ficha,
+	N.CodigoEmpresa,
+	FechaPago,
+	Anio,
+	Periodo AS IdPeriodo,
+	UPPER(
+		CONVERT(NVARCHAR(10), Periodo) + ' - PERIODO ' +
+		CASE WHEN AreaNomina IN ('C1','C2','Q1','Q2') THEN 'NORMAL'
+			 WHEN AreaNomina IN ('S1','S2') THEN 'ING P SERV ALIM Y HOSP NO ISR' --'ING P SERV ALIM Y HOSP NO ISR'
+			 ELSE 'ESPECIAL'
+		END
+	) AS Periodo,
+	CONVERT(NUMERIC(18,2), SalarioBruto) AS SalarioBruto,
+	CONVERT(NUMERIC(18,2), Deduccion) AS Deduccion,
+	AreaNomina AS IdTipoNominaAsig,
+	AreaNomina AS IdTipoNominaProc
+	FROM [dbo].[Nomina] AS N
+	INNER JOIN Empleado AS E ON N.CodigoPersonal = E.CodigoPersonal AND E.Estatus = @EstadoEmpleadoActivo AND E.RegBorrado = 0
+	WHERE N.RegBorrado = 0
+	AND N.CodigoPersonal = @Ficha
+	AND Anio = @Anio
+	AND (AreaNomina = @IdTipoNominaProc OR ISNULL(@IdTipoNominaProc,'')='')
+)
+SELECT 
+	ROWNUM, 
+	TOTALCOUNT,  
+	NominaId,
+	Ficha,
+	CodigoEmpresa,
+	FechaPago,
+	Anio,
+	IdPeriodo,
+	Periodo,
+	SalarioBruto,
+	Deduccion,
+	IdTipoNominaAsig,
+	IdTipoNominaProc
+	FROM CTE_RESULT  
+WHERE ROWNUM > @LFIRSTREC AND ROWNUM < @LLASTREC 
+END
